@@ -12,6 +12,7 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 backend/.env*
+backend/local.settings.json
 
 # Build outputs
 dist/
