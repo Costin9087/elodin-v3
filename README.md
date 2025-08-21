@@ -11,3 +11,4 @@ Azure Static Web Apps deployment test with deployment token configured.
 
 ## Live Demo
 Access the deployed app via Azure Static Web Apps URL.
+Deployment fix: removed conflicting workflows
