@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { ArrowLeft, Plus, X, ZoomIn, AlertTriangle, CheckCircle, XCircle } from 'lucide-react'
+import { ArrowLeft, Plus, X, ZoomIn, CheckCircle, XCircle } from 'lucide-react'
 import { ReviewResult, ServiceDebugInfo } from '../App'
 
 interface ResultsStepProps {

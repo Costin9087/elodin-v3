@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import UploadStep from './components/UploadStep'
 import ResultsStep from './components/ResultsStep'
 import Header from './components/Header'
@@ -28,7 +28,7 @@ export interface ServiceDebugInfo {
 
 function App() {
   const [currentStep, setCurrentStep] = useState<'upload' | 'results'>('upload')
-  const [contentUnderstandingData, setContentUnderstandingData] = useState<any>(null)
+  const [, setContentUnderstandingData] = useState<any>(null)
   const [reviewResults, setReviewResults] = useState<ReviewResult[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null)
