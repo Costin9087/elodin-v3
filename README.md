@@ -24,6 +24,21 @@ A powerful AI-driven copy review application that helps ensure content complianc
 - **Azure Content Understanding** for document processing
 - **Azure Prompt Flow** for AI-powered copy review
 
+## 🌐 Deployment
+
+The app is configured for deployment on **Azure Static Web Apps** with automatic CI/CD via GitHub Actions.
+
+### Azure Static Web Apps Setup
+
+1. **Create Azure Static Web Apps resource** in Azure Portal
+2. **Connect to GitHub repository**: https://github.com/Costin9087/elodin-v3
+3. **Build configuration**:
+   - App location: `./frontend`
+   - API location: `./backend`
+   - Output location: `dist`
+4. **Add deployment token** to GitHub Secrets as `AZURE_STATIC_WEB_APPS_API_TOKEN`
+5. **Configure environment variables** in Azure for your Azure services
+
 ## 🛠️ Development Setup
 
 ### Prerequisites
