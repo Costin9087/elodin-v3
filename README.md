@@ -21,16 +21,10 @@ A powerful AI-driven copy review application that helps ensure content complianc
 
 ### Backend
 - **Express.js** with TypeScript
-- **Azure Functions** for serverless deployment
 - **Azure Content Understanding** for document processing
 - **Azure Prompt Flow** for AI-powered copy review
 
-### Cloud Deployment
-- **Azure Static Web Apps** for hosting
-- **GitHub Actions** for CI/CD
-- **Azure Cognitive Services** integration
-
-## 🛠️ Development
+## 🛠️ Development Setup
 
 ### Prerequisites
 - Node.js 18+
@@ -62,7 +56,9 @@ A powerful AI-driven copy review application that helps ensure content complianc
    npm run dev
    ```
 
-   This starts both frontend (http://localhost:3000) and backend (http://localhost:3001)
+   This starts both:
+   - **Frontend**: http://localhost:3000
+   - **Backend**: http://localhost:3001
 
 ### Environment Variables
 
@@ -76,17 +72,6 @@ AZURE_PROMPT_FLOW_KEY=your-prompt-flow-key
 AZURE_PROMPT_FLOW_DEPLOYMENT=default
 PORT=3001
 ```
-
-## 🌐 Deployment
-
-The app is configured for deployment on Azure Static Web Apps with automatic CI/CD via GitHub Actions.
-
-### Azure Static Web Apps Setup
-
-1. Create an Azure Static Web Apps resource
-2. Connect to this GitHub repository
-3. Add the deployment token to GitHub Secrets as `AZURE_STATIC_WEB_APPS_API_TOKEN`
-4. Push to main branch to trigger deployment
 
 ## 📁 Project Structure
 
@@ -102,12 +87,10 @@ elodin-v3/
 ├── backend/                 # Express.js backend
 │   ├── src/
 │   │   ├── services/       # Azure service integrations
-│   │   ├── functions/      # Azure Functions
 │   │   └── index.ts        # Express server
 │   ├── env.example         # Environment variables template
 │   └── package.json        # Backend dependencies
 ├── Context/                 # Documentation and examples
-├── .github/workflows/       # GitHub Actions CI/CD
 └── package.json            # Root package.json
 ```
 
@@ -119,13 +102,36 @@ elodin-v3/
 4. **Get Suggestions**: Receive intelligent recommendations for improvements
 5. **Review Results**: See original text, suggestions, and rationale
 
+## 🔧 Available Scripts
+
+### Root Level
+- `npm run dev` - Start both frontend and backend
+- `npm run install:all` - Install all dependencies
+- `npm run build` - Build both frontend and backend
+
+### Frontend
+- `npm run dev` - Start Vite dev server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+
+### Backend
+- `npm run dev` - Start Express server with hot reload
+- `npm run build` - Compile TypeScript
+- `npm run start` - Start production server
+
+## 🧪 Testing the App
+
+1. Start the development servers: `npm run dev`
+2. Open http://localhost:3000 in your browser
+3. Upload a test image with text
+4. Review the AI-generated suggestions
+
 ## 🔧 Technologies
 
 - **Frontend**: React, TypeScript, Vite, TailwindCSS
 - **Backend**: Node.js, Express, TypeScript
-- **Cloud**: Azure Static Web Apps, Azure Functions
 - **AI Services**: Azure Content Understanding, Azure Prompt Flow
-- **DevOps**: GitHub Actions, Azure DevOps
+- **Development**: Hot reload, TypeScript compilation
 
 ## 📄 License
 
