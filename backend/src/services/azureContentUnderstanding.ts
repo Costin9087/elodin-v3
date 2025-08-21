@@ -31,6 +31,8 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
     console.log('Sending request to:', analyzeUrl);
 
     // Start the analysis
+    console.log(`Sending ${imageBuffer.length} bytes to Azure Content Understanding...`);
+    
     const response = await axios.post(analyzeUrl, imageBuffer, {
       headers: {
         'Content-Type': 'application/octet-stream',
@@ -38,14 +40,29 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
         'x-ms-useragent': 'copy-review-app'
       },
       timeout: 30000,
+      validateStatus: function (status) {
+        return status < 500; // Allow 4xx responses to be handled
+      }
     });
+
+    console.log('Azure response:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.keys(response.headers),
+      dataType: typeof response.data,
+      dataPreview: response.data ? JSON.stringify(response.data).substring(0, 200) : 'empty'
+    });
+
+    if (response.status !== 202) {
+      throw new Error(`Azure Content Understanding API returned ${response.status}: ${response.statusText}. Response: ${JSON.stringify(response.data)}`);
+    }
 
     const operationLocation = response.headers['operation-location'];
     if (!operationLocation) {
       throw new Error('No operation location received from Azure API');
     }
 
-    console.log('Analysis started, polling for results...');
+    console.log('Analysis started, polling for results at:', operationLocation);
 
     // Poll for results
     let result;
@@ -59,7 +76,21 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
         headers: {
           'Ocp-Apim-Subscription-Key': apiKey,
         },
+        validateStatus: function (status) {
+          return status < 500; // Allow 4xx responses to be handled
+        }
       });
+
+      console.log(`Poll response ${attempts + 1}:`, {
+        status: pollResponse.status,
+        statusText: pollResponse.statusText,
+        dataType: typeof pollResponse.data,
+        dataPreview: pollResponse.data ? JSON.stringify(pollResponse.data).substring(0, 200) : 'empty'
+      });
+
+      if (pollResponse.status !== 200) {
+        throw new Error(`Polling failed with status ${pollResponse.status}: ${pollResponse.statusText}. Response: ${JSON.stringify(pollResponse.data)}`);
+      }
 
       result = pollResponse.data;
       
@@ -67,7 +98,7 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
         console.log('Analysis completed successfully');
         break;
       } else if (result.status === 'Failed') {
-        throw new Error(`Analysis failed: ${result.error?.message || 'Unknown error'}`);
+        throw new Error(`Analysis failed: ${result.error?.message || JSON.stringify(result.error) || 'Unknown error'}`);
       }
       
       attempts++;
