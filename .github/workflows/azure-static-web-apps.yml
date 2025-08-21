@@ -19,6 +19,16 @@ jobs:
         with:
           submodules: true
           lfs: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd frontend && npm ci
+          cd ../backend && npm ci
       - name: Build And Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
@@ -29,8 +39,8 @@ jobs:
           app_location: "/frontend"
           api_location: "/backend"
           output_location: "dist"
-          app_build_command: "npm run build"
-          api_build_command: "npm run build"
+          skip_app_build: false
+          skip_api_build: false
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
