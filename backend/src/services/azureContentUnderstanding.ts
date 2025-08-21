@@ -22,11 +22,10 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
   try {
     console.log('Using Azure Content Understanding API...');
     
-    // Use the custom Content Understanding analyzer
-    const analyzerId = 'extract-copy'; // Your custom analyzer
-    const apiVersion = '2025-05-01-preview';
+    // Try Document Intelligence Layout API first (more compatible)
+    const apiVersion = '2024-07-31-preview';
     
-    const analyzeUrl = `${endpoint.replace(/\/$/, '')}/contentunderstanding/analyzers/${analyzerId}:analyze?api-version=${apiVersion}&stringEncoding=utf16`;
+    const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}&stringIndexType=utf16CodeUnit`;
     
     console.log('Sending request to:', analyzeUrl);
 
@@ -113,14 +112,139 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
     return result;
 
   } catch (error) {
-    console.error('Azure Content Understanding error:', error);
+    console.error('Azure Document Intelligence Layout API error:', error);
     if (axios.isAxiosError(error)) {
       console.error('Response status:', error.response?.status);
       console.error('Response data:', error.response?.data);
+      console.error('Response headers:', error.response?.headers);
     }
-    // Re-throw the error instead of falling back to mock data
-    throw error;
+    
+    // Try fallback to basic read API
+    try {
+      console.log('Trying fallback to basic Document Intelligence Read API...');
+      return await tryDocumentIntelligenceReadAPI(imageBuffer, endpoint, apiKey);
+    } catch (fallbackError) {
+      console.error('Fallback API also failed:', fallbackError);
+      // Re-throw the original error
+      throw error;
+    }
   }
+}
+
+async function tryDocumentIntelligenceReadAPI(imageBuffer: Buffer, endpoint: string, apiKey: string): Promise<any> {
+  const apiVersion = '2024-07-31-preview';
+  const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/prebuilt-read:analyze?api-version=${apiVersion}`;
+  
+  console.log('Trying Document Intelligence Read API:', analyzeUrl);
+  
+  // Start the analysis
+  const response = await axios.post(analyzeUrl, imageBuffer, {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'Ocp-Apim-Subscription-Key': apiKey,
+    },
+    timeout: 30000,
+    validateStatus: function (status) {
+      return status < 500;
+    }
+  });
+
+  console.log('Read API response:', {
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.keys(response.headers)
+  });
+
+  if (response.status !== 202) {
+    throw new Error(`Document Intelligence Read API returned ${response.status}: ${response.statusText}. Response: ${JSON.stringify(response.data)}`);
+  }
+
+  const operationLocation = response.headers['operation-location'];
+  if (!operationLocation) {
+    throw new Error('No operation location received from Document Intelligence Read API');
+  }
+
+  // Poll for results
+  let result;
+  let attempts = 0;
+  const maxAttempts = 30;
+  
+  while (attempts < maxAttempts) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    const pollResponse = await axios.get(operationLocation, {
+      headers: {
+        'Ocp-Apim-Subscription-Key': apiKey,
+      },
+      validateStatus: function (status) {
+        return status < 500;
+      }
+    });
+
+    if (pollResponse.status !== 200) {
+      throw new Error(`Read API polling failed with status ${pollResponse.status}`);
+    }
+
+    result = pollResponse.data;
+    
+    if (result.status === 'succeeded') {
+      console.log('Document Intelligence Read API completed successfully');
+      return convertReadResultToContentUnderstanding(result);
+    } else if (result.status === 'failed') {
+      throw new Error(`Read API analysis failed: ${result.error?.message || 'Unknown error'}`);
+    }
+    
+    attempts++;
+    console.log(`Read API polling attempt ${attempts}, status: ${result.status}`);
+  }
+
+  throw new Error('Read API analysis timed out');
+}
+
+function convertReadResultToContentUnderstanding(readResult: any): any {
+  // Convert Document Intelligence Read result to Content Understanding format
+  const textElements = [];
+  
+  if (readResult.analyzeResult?.paragraphs) {
+    for (const paragraph of readResult.analyzeResult.paragraphs) {
+      textElements.push({
+        type: 'object',
+        valueObject: {
+          role: { type: 'string', valueString: 'body' },
+          text: { type: 'string', valueString: paragraph.content },
+          count: { type: 'number', valueNumber: paragraph.content.length },
+          description: { type: 'string', valueString: 'Extracted paragraph content' }
+        }
+      });
+    }
+  }
+  
+  return {
+    id: readResult.operationId || 'read-api-result',
+    status: 'Succeeded',
+    result: {
+      analyzerId: 'document-intelligence-read',
+      apiVersion: '2024-07-31-preview',
+      createdAt: new Date().toISOString(),
+      warnings: [],
+      contents: [{
+        fields: {
+          ui_text: {
+            type: 'array',
+            valueArray: textElements
+          },
+          mockup_summary: {
+            type: 'string',
+            valueString: 'Text extracted using Document Intelligence Read API'
+          },
+          experience_archetype: {
+            type: 'string',
+            valueString: 'document_content'
+          }
+        }
+      }]
+    }
+  };
 }
 
 function getMockContentUnderstandingResponse(): any {
