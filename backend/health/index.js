@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.health = health;
 const functions_1 = require("@azure/functions");
-async function health(request, context) {
+module.exports = async function (context, req) {
     try {
         context.log('Health check requested');
         const healthResponse = {
@@ -22,9 +22,9 @@ async function health(request, context) {
             message: 'Azure Function is running successfully'
         };
         context.log('Health check response:', JSON.stringify(healthResponse, null, 2));
-        return {
+        context.res = {
             status: 200,
-            jsonBody: healthResponse,
+            body: healthResponse,
             headers: {
                 'Content-Type': 'application/json'
             }
@@ -32,9 +32,9 @@ async function health(request, context) {
     }
     catch (error) {
         context.log('Health check error:', error);
-        return {
+        context.res = {
             status: 500,
-            jsonBody: {
+            body: {
                 status: 'ERROR',
                 timestamp: new Date().toISOString(),
                 error: error instanceof Error ? error.message : String(error),
@@ -45,10 +45,4 @@ async function health(request, context) {
             }
         };
     }
-}
-functions_1.app.http('health', {
-    methods: ['GET'],
-    authLevel: 'anonymous',
-    handler: health
-});
-//# sourceMappingURL=health.js.map
+};
