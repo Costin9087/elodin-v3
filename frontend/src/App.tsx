@@ -57,18 +57,32 @@ function App() {
         body: formData,
       })
       
+      console.log('Extract response status:', extractResponse.status, extractResponse.statusText)
+      console.log('Extract response headers:', Object.fromEntries(extractResponse.headers.entries()))
+      
       const extractResponseText = await extractResponse.text()
+      console.log('Extract response text length:', extractResponseText.length)
+      console.log('Extract response text preview:', extractResponseText.substring(0, 200))
+      
       let contentUnderstandingData
       
       try {
         contentUnderstandingData = JSON.parse(extractResponseText)
       } catch (parseError) {
+        console.error('JSON parse error details:', {
+          error: parseError,
+          responseLength: extractResponseText.length,
+          responsePreview: extractResponseText.substring(0, 500),
+          responseStatus: extractResponse.status,
+          responseHeaders: Object.fromEntries(extractResponse.headers.entries())
+        })
+        
         debugInfo.contentUnderstanding = {
           success: false,
           error: `JSON parse error: ${parseError}`,
-          response: extractResponseText
+          response: extractResponseText.length > 0 ? extractResponseText : '(Empty response)'
         }
-        throw new Error('Invalid JSON response from Content Understanding')
+        throw new Error(`Invalid JSON response from Content Understanding: ${parseError}`)
       }
 
       if (!extractResponse.ok) {

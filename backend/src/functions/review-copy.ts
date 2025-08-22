@@ -38,11 +38,18 @@ export async function reviewCopy(request: HttpRequest, context: InvocationContex
         
         context.log('Copy review completed');
         
+        const responseBody = {
+            success: true,
+            data: reviewResults
+        };
+        
+        context.log('Returning review response:', JSON.stringify(responseBody, null, 2));
+        
         return {
             status: 200,
-            jsonBody: {
-                success: true,
-                data: reviewResults
+            jsonBody: responseBody,
+            headers: {
+                'Content-Type': 'application/json'
             }
         };
 
@@ -58,12 +65,19 @@ export async function reviewCopy(request: HttpRequest, context: InvocationContex
             statusCode = 404;
         }
         
+        const errorResponse = {
+            error: 'Azure Prompt Flow Failed',
+            message: errorMessage,
+            service: 'Azure Prompt Flow'
+        };
+        
+        context.log('Returning error response:', JSON.stringify(errorResponse, null, 2));
+        
         return {
             status: statusCode,
-            jsonBody: {
-                error: 'Azure Prompt Flow Failed',
-                message: errorMessage,
-                service: 'Azure Prompt Flow'
+            jsonBody: errorResponse,
+            headers: {
+                'Content-Type': 'application/json'
             }
         };
     }

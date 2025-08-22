@@ -25,7 +25,15 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
     // Try Document Intelligence Layout API first (more compatible)
     const apiVersion = '2024-07-31-preview';
     
-    const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}&stringIndexType=utf16CodeUnit`;
+    // Check if this is a Document Intelligence endpoint (newer) or Form Recognizer endpoint (older)
+    let analyzeUrl;
+    if (endpoint.includes('cognitiveservices.azure.com')) {
+      // Form Recognizer API format
+      analyzeUrl = `${endpoint.replace(/\/$/, '')}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}&stringIndexType=utf16CodeUnit`;
+    } else {
+      // Document Intelligence API format
+      analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}&stringIndexType=utf16CodeUnit`;
+    }
     
     console.log('Sending request to:', analyzeUrl);
 
@@ -41,7 +49,9 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
       timeout: 30000,
       validateStatus: function (status) {
         return status < 500; // Allow 4xx responses to be handled
-      }
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
     });
 
     console.log('Azure response:', {
@@ -77,14 +87,16 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
         },
         validateStatus: function (status) {
           return status < 500; // Allow 4xx responses to be handled
-        }
+        },
+        timeout: 10000 // Add timeout to prevent hanging
       });
 
       console.log(`Poll response ${attempts + 1}:`, {
         status: pollResponse.status,
         statusText: pollResponse.statusText,
         dataType: typeof pollResponse.data,
-        dataPreview: pollResponse.data ? JSON.stringify(pollResponse.data).substring(0, 200) : 'empty'
+        dataPreview: pollResponse.data ? JSON.stringify(pollResponse.data).substring(0, 200) : 'empty',
+        contentLength: pollResponse.headers['content-length'] || 'unknown'
       });
 
       if (pollResponse.status !== 200) {
@@ -92,6 +104,12 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
       }
 
       result = pollResponse.data;
+      
+      // Check if we received valid data
+      if (!result || typeof result !== 'object') {
+        console.error('Invalid response data:', result);
+        throw new Error(`Invalid response data received: ${typeof result}`);
+      }
       
       if (result.status === 'Succeeded') {
         console.log('Analysis completed successfully');
@@ -106,6 +124,12 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
 
     if (!result || result.status !== 'Succeeded') {
       throw new Error('Analysis timed out or failed');
+    }
+
+    // Validate the result structure
+    if (!result.result || !result.result.contents) {
+      console.error('Invalid result structure:', result);
+      throw new Error('Azure returned incomplete result structure');
     }
 
     console.log('Content Understanding analysis completed:', JSON.stringify(result, null, 2));
@@ -125,8 +149,16 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
       return await tryDocumentIntelligenceReadAPI(imageBuffer, endpoint, apiKey);
     } catch (fallbackError) {
       console.error('Fallback API also failed:', fallbackError);
-      // Re-throw the original error
-      throw error;
+      
+      // Try older Form Recognizer API as final fallback
+      try {
+        console.log('Trying final fallback to older Form Recognizer API...');
+        return await tryFormRecognizerAPI(imageBuffer, endpoint, apiKey);
+      } catch (formRecognizerError) {
+        console.error('Form Recognizer API also failed:', formRecognizerError);
+        // Re-throw the original error
+        throw error;
+      }
     }
   }
 }
@@ -178,7 +210,8 @@ async function tryDocumentIntelligenceReadAPI(imageBuffer: Buffer, endpoint: str
       },
       validateStatus: function (status) {
         return status < 500;
-      }
+      },
+      timeout: 10000
     });
 
     if (pollResponse.status !== 200) {
@@ -186,6 +219,12 @@ async function tryDocumentIntelligenceReadAPI(imageBuffer: Buffer, endpoint: str
     }
 
     result = pollResponse.data;
+    
+    // Check if we received valid data
+    if (!result || typeof result !== 'object') {
+      console.error('Invalid fallback response data:', result);
+      throw new Error(`Invalid fallback response data received: ${typeof result}`);
+    }
     
     if (result.status === 'succeeded') {
       console.log('Document Intelligence Read API completed successfully');
@@ -199,6 +238,174 @@ async function tryDocumentIntelligenceReadAPI(imageBuffer: Buffer, endpoint: str
   }
 
   throw new Error('Read API analysis timed out');
+}
+
+async function tryFormRecognizerAPI(imageBuffer: Buffer, endpoint: string, apiKey: string): Promise<any> {
+  // Try different API versions and paths for Form Recognizer
+  const apiVersions = ['2023-07-31', '2022-08-31', '2021-09-30-preview'];
+  const paths = [
+    'formrecognizer/documentModels/prebuilt-layout:analyze',
+    'formrecognizer/v2.1/layout/analyze',
+    'formrecognizer/v2.0/Layout/analyze'
+  ];
+  
+  for (const apiVersion of apiVersions) {
+    for (const path of paths) {
+      try {
+        console.log(`Trying Form Recognizer API version ${apiVersion} with path ${path}...`);
+        
+        let analyzeUrl;
+        if (path.includes('v2.')) {
+          // v2.x API format
+          analyzeUrl = `${endpoint.replace(/\/$/, '')}/${path}`;
+        } else {
+          // v3.x API format
+          analyzeUrl = `${endpoint.replace(/\/$/, '')}/${path}?api-version=${apiVersion}`;
+        }
+        
+        console.log('Form Recognizer URL:', analyzeUrl);
+        
+        // Start the analysis
+        const response = await axios.post(analyzeUrl, imageBuffer, {
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Ocp-Apim-Subscription-Key': apiKey,
+          },
+          timeout: 30000,
+          validateStatus: function (status) {
+            return status < 500;
+          }
+        });
+
+        console.log('Form Recognizer response:', {
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.keys(response.headers)
+        });
+
+        if (response.status === 202) {
+          // Async operation started successfully
+          const operationLocation = response.headers['operation-location'];
+          if (!operationLocation) {
+            console.log('No operation location, trying next API version...');
+            continue;
+          }
+
+          console.log('Form Recognizer analysis started, polling for results...');
+          
+          // Poll for results
+          let result;
+          let attempts = 0;
+          const maxAttempts = 30;
+          
+          while (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            const pollResponse = await axios.get(operationLocation, {
+              headers: {
+                'Ocp-Apim-Subscription-Key': apiKey,
+              },
+              timeout: 10000
+            });
+
+            if (pollResponse.status !== 200) {
+              break; // Try next API version
+            }
+
+            result = pollResponse.data;
+            
+            if (result.status === 'succeeded' || result.status === 'Succeeded') {
+              console.log('Form Recognizer analysis completed successfully');
+              return convertFormRecognizerResult(result);
+            } else if (result.status === 'failed' || result.status === 'Failed') {
+              break; // Try next API version
+            }
+            
+            attempts++;
+            console.log(`Form Recognizer polling attempt ${attempts}, status: ${result.status}`);
+          }
+          
+        } else if (response.status === 200) {
+          // Synchronous response
+          console.log('Form Recognizer returned synchronous response');
+          return convertFormRecognizerResult(response.data);
+        }
+        
+      } catch (apiError) {
+        console.log(`Form Recognizer API ${apiVersion}/${path} failed:`, apiError instanceof Error ? apiError.message : String(apiError));
+        continue; // Try next combination
+      }
+    }
+  }
+  
+  throw new Error('All Form Recognizer API versions failed');
+}
+
+function convertFormRecognizerResult(formRecognizerResult: any): any {
+  // Convert Form Recognizer result to expected format
+  const textElements = [];
+  
+  // Handle different response formats
+  let analyzeResult = formRecognizerResult.analyzeResult || formRecognizerResult;
+  
+  if (analyzeResult.readResults) {
+    // v2.x format
+    for (const page of analyzeResult.readResults) {
+      if (page.lines) {
+        for (const line of page.lines) {
+          textElements.push({
+            type: 'object',
+            valueObject: {
+              role: { type: 'string', valueString: 'body' },
+              text: { type: 'string', valueString: line.text },
+              count: { type: 'number', valueNumber: line.text.length },
+              description: { type: 'string', valueString: 'Extracted text content' }
+            }
+          });
+        }
+      }
+    }
+  } else if (analyzeResult.paragraphs) {
+    // v3.x format
+    for (const paragraph of analyzeResult.paragraphs) {
+      textElements.push({
+        type: 'object',
+        valueObject: {
+          role: { type: 'string', valueString: 'body' },
+          text: { type: 'string', valueString: paragraph.content },
+          count: { type: 'number', valueNumber: paragraph.content.length },
+          description: { type: 'string', valueString: 'Extracted paragraph content' }
+        }
+      });
+    }
+  }
+  
+  return {
+    id: formRecognizerResult.operationId || 'form-recognizer-result',
+    status: 'Succeeded',
+    result: {
+      analyzerId: 'form-recognizer',
+      apiVersion: 'legacy',
+      createdAt: new Date().toISOString(),
+      warnings: [],
+      contents: [{
+        fields: {
+          ui_text: {
+            type: 'array',
+            valueArray: textElements
+          },
+          mockup_summary: {
+            type: 'string',
+            valueString: 'Text extracted using Form Recognizer API'
+          },
+          experience_archetype: {
+            type: 'string',
+            valueString: 'document_content'
+          }
+        }
+      }]
+    }
+  };
 }
 
 function convertReadResultToContentUnderstanding(readResult: any): any {

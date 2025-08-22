@@ -1,9 +1,10 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 
 export async function extractText(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
-    context.log('HTTP trigger function processed a request.');
-
     try {
+        context.log('HTTP trigger function processed a request.');
+        context.log('Starting text extraction process...');
+        
         // Check environment variables first
         const endpoint = process.env.AZURE_FORM_RECOGNIZER_ENDPOINT;
         const apiKey = process.env.AZURE_FORM_RECOGNIZER_KEY;
@@ -56,18 +57,39 @@ export async function extractText(request: HttpRequest, context: InvocationConte
         // Extract text using Azure Content Understanding
         const extractionResult = await extractTextFromImage(buffer);
         
-        context.log('Text extraction completed');
+        context.log('Text extraction completed, result:', JSON.stringify(extractionResult, null, 2));
         
-        return {
+        // Ensure we have valid data to return
+        if (!extractionResult) {
+            throw new Error('Azure Content Understanding returned empty result');
+        }
+        
+        const responseBody = {
+            success: true,
+            data: extractionResult
+        };
+        
+        context.log('Returning response:', JSON.stringify(responseBody, null, 2));
+        
+        const response = {
             status: 200,
-            jsonBody: {
-                success: true,
-                data: extractionResult
+            jsonBody: responseBody,
+            headers: {
+                'Content-Type': 'application/json'
             }
         };
+        
+        context.log('Final Azure Function response:', JSON.stringify(response, null, 2));
+        return response;
 
     } catch (error) {
         context.log('Text extraction error:', error);
+        context.log('Error type:', typeof error);
+        context.log('Error details:', error instanceof Error ? {
+            name: error.name,
+            message: error.message,
+            stack: error.stack
+        } : error);
         
         let statusCode = 500;
         let errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -91,13 +113,20 @@ export async function extractText(request: HttpRequest, context: InvocationConte
             details.responseData = axiosError.response?.data;
         }
         
+        const errorResponse = {
+            error: 'Azure Content Understanding Failed',
+            message: errorMessage,
+            service: 'Azure Content Understanding',
+            details: details
+        };
+        
+        context.log('Returning error response:', JSON.stringify(errorResponse, null, 2));
+        
         return {
             status: statusCode,
-            jsonBody: {
-                error: 'Azure Content Understanding Failed',
-                message: errorMessage,
-                service: 'Azure Content Understanding',
-                details: details
+            jsonBody: errorResponse,
+            headers: {
+                'Content-Type': 'application/json'
             }
         };
     }
