@@ -1,7 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.health = health;
-const functions_1 = require("@azure/functions");
 module.exports = async function (context, req) {
     context.log('Health check requested');
     
