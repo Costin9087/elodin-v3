@@ -1,4 +1,4 @@
-const { extractTextFromImage } = require('../../dist/services/azureContentUnderstanding');
+// const { extractTextFromImage } = require('../../dist/services/azureContentUnderstanding');
 
 module.exports = async function (context, req) {
     try {
@@ -119,8 +119,44 @@ module.exports = async function (context, req) {
 
         context.log(`Image buffer created, size: ${buffer.length} bytes`);
 
-        // Extract text using Azure Content Understanding
-        const extractionResult = await extractTextFromImage(buffer);
+        // For now, return mock data since we need to fix the module loading
+        // const extractionResult = await extractTextFromImage(buffer);
+        
+        context.log('Returning mock extraction result for testing...');
+        const extractionResult = {
+            id: 'mock-extraction-id',
+            status: 'Succeeded',
+            result: {
+                analyzerId: 'mock-test',
+                apiVersion: 'test',
+                createdAt: new Date().toISOString(),
+                warnings: [],
+                contents: [{
+                    fields: {
+                        ui_text: {
+                            type: 'array',
+                            valueArray: [{
+                                type: 'object',
+                                valueObject: {
+                                    role: { type: 'string', valueString: 'body' },
+                                    text: { type: 'string', valueString: 'Mock text from Azure Static Web Apps function!' },
+                                    count: { type: 'number', valueNumber: 45 },
+                                    description: { type: 'string', valueString: 'Mock test data from deployed function' }
+                                }
+                            }]
+                        },
+                        mockup_summary: {
+                            type: 'string',
+                            valueString: 'Mock extraction result from Azure Static Web Apps'
+                        },
+                        experience_archetype: {
+                            type: 'string',
+                            valueString: 'test_deployment'
+                        }
+                    }
+                }]
+            }
+        };
         
         context.log('Text extraction completed, result:', JSON.stringify(extractionResult, null, 2));
         
