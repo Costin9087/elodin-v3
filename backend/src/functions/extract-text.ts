@@ -5,6 +5,59 @@ export async function extractText(request: HttpRequest, context: InvocationConte
         context.log('HTTP trigger function processed a request.');
         context.log('Starting text extraction process...');
         
+        // Check for mock mode (for testing deployment)
+        const useMockData = process.env.USE_MOCK_DATA === 'true';
+        if (useMockData) {
+            context.log('Using mock data for testing...');
+            const mockResponse = {
+                success: true,
+                data: {
+                    id: 'mock-test-id',
+                    status: 'Succeeded',
+                    result: {
+                        analyzerId: 'mock-analyzer',
+                        apiVersion: 'test',
+                        createdAt: new Date().toISOString(),
+                        warnings: [],
+                        contents: [{
+                            fields: {
+                                ui_text: {
+                                    type: 'array',
+                                    valueArray: [{
+                                        type: 'object',
+                                        valueObject: {
+                                            role: { type: 'string', valueString: 'body' },
+                                            text: { type: 'string', valueString: 'Mock text extraction result - deployment is working!' },
+                                            count: { type: 'number', valueNumber: 50 },
+                                            description: { type: 'string', valueString: 'Mock test data' }
+                                        }
+                                    }]
+                                },
+                                mockup_summary: {
+                                    type: 'string',
+                                    valueString: 'Mock data for testing Azure Function deployment'
+                                },
+                                experience_archetype: {
+                                    type: 'string',
+                                    valueString: 'test_deployment'
+                                }
+                            }
+                        }]
+                    }
+                }
+            };
+            
+            context.log('Returning mock response:', JSON.stringify(mockResponse, null, 2));
+            
+            return {
+                status: 200,
+                jsonBody: mockResponse,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+        }
+        
         // Check environment variables first
         const endpoint = process.env.AZURE_FORM_RECOGNIZER_ENDPOINT;
         const apiKey = process.env.AZURE_FORM_RECOGNIZER_KEY;
@@ -12,7 +65,12 @@ export async function extractText(request: HttpRequest, context: InvocationConte
         context.log('Environment check:', {
             hasEndpoint: !!endpoint,
             hasApiKey: !!apiKey,
-            endpointPreview: endpoint ? endpoint.substring(0, 30) + '...' : 'not set'
+            endpointPreview: endpoint ? endpoint.substring(0, 30) + '...' : 'not set',
+            nodeVersion: process.version,
+            platform: process.platform,
+            timestamp: new Date().toISOString(),
+            functionApp: process.env.WEBSITE_SITE_NAME || 'local',
+            azureEnvironment: process.env.AZURE_FUNCTIONS_ENVIRONMENT || 'unknown'
         });
         
         if (!endpoint || !apiKey) {
