@@ -2,57 +2,6 @@ module.exports = async function (context, req) {
     context.log('Extract-text function called via', req.method);
     
     try {
-        // Check for mock mode (for testing deployment)
-        const useMockData = process.env.USE_MOCK_DATA === 'true';
-        if (useMockData) {
-            context.log('Using mock data for testing...');
-            const mockResponse = {
-                success: true,
-                data: {
-                    id: 'mock-test-id',
-                    status: 'Succeeded',
-                    result: {
-                        analyzerId: 'mock-analyzer',
-                        apiVersion: 'test',
-                        createdAt: new Date().toISOString(),
-                        warnings: [],
-                        contents: [{
-                            fields: {
-                                ui_text: {
-                                    type: 'array',
-                                    valueArray: [{
-                                        type: 'object',
-                                        valueObject: {
-                                            role: { type: 'string', valueString: 'body' },
-                                            text: { type: 'string', valueString: 'Mock text extraction result - deployment is working!' },
-                                            count: { type: 'number', valueNumber: 50 },
-                                            description: { type: 'string', valueString: 'Mock test data' }
-                                        }
-                                    }]
-                                },
-                                mockup_summary: {
-                                    type: 'string',
-                                    valueString: 'Mock data for testing Azure Function deployment'
-                                },
-                                experience_archetype: {
-                                    type: 'string',
-                                    valueString: 'test_deployment'
-                                }
-                            }
-                        }]
-                    }
-                }
-            };
-            
-            context.res = {
-                status: 200,
-                body: mockResponse,
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            };
-            return;
-        }
         
         // Check environment variables first
         const endpoint = process.env.AZURE_FORM_RECOGNIZER_ENDPOINT;
@@ -127,18 +76,17 @@ module.exports = async function (context, req) {
             context.log('Found image in req.rawBody');
             imageBuffer = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
         } else {
-            context.log('No image data found, using mock response');
-            // Return a successful mock response
-            const extractionResult = await callAzureContentUnderstandingAPI(null, endpoint, apiKey, context);
-            
-            const responseBody = {
-                success: true,
-                data: extractionResult
-            };
-            
             context.res = {
-                status: 200,
-                body: responseBody,
+                status: 400,
+                body: {
+                    error: 'No image data provided',
+                    message: 'Please upload an image file for text extraction',
+                    details: {
+                        method: req.method,
+                        hasBody: !!req.body,
+                        hasRawBody: !!req.rawBody
+                    }
+                },
                 headers: {
                     'Content-Type': 'application/json'
                 }
@@ -189,50 +137,12 @@ module.exports = async function (context, req) {
 };
 
 async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, context) {
-    // If no image buffer, return mock response
-    if (!imageBuffer) {
-        context.log('No image provided, returning mock response');
-        return {
-            id: 'mock-no-image-id',
-            status: 'Succeeded',
-            result: {
-                analyzerId: 'mock-analyzer',
-                apiVersion: '2024-07-31-preview',
-                createdAt: new Date().toISOString(),
-                warnings: ['No image provided - mock response'],
-                contents: [{
-                    fields: {
-                        ui_text: {
-                            type: 'array',
-                            valueArray: [{
-                                type: 'object',
-                                valueObject: {
-                                    role: { type: 'string', valueString: 'body' },
-                                    text: { type: 'string', valueString: 'Azure Function is ready to process images!' },
-                                    count: { type: 'number', valueNumber: 42 },
-                                    description: { type: 'string', valueString: 'Mock response - function is working' }
-                                }
-                            }]
-                        },
-                        mockup_summary: {
-                            type: 'string',
-                            valueString: 'Ready to process real images with Azure Content Understanding'
-                        },
-                        experience_archetype: {
-                            type: 'string',
-                            valueString: 'function_ready'
-                        }
-                    }
-                }]
-            }
-        };
-    }
+    const https = require('https');
+    const url = require('url');
     
     try {
         context.log('Calling Azure Content Understanding API...');
         
-        // Use the older, more reliable Form Recognizer API
-        const axios = require('axios');
         const apiVersion = '2023-07-31';
         
         let analyzeUrl;
@@ -246,25 +156,23 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
         
         context.log('Sending request to:', analyzeUrl);
 
-        // Start the analysis
-        const response = await axios.post(analyzeUrl, imageBuffer, {
+        // Start the analysis using built-in https module
+        const initialResponse = await makeHttpsRequest(analyzeUrl, {
+            method: 'POST',
             headers: {
                 'Content-Type': 'application/octet-stream',
                 'Ocp-Apim-Subscription-Key': apiKey,
             },
-            timeout: 30000,
-            validateStatus: function (status) {
-                return status < 500;
-            }
+            body: imageBuffer
         });
 
-        context.log('Azure response status:', response.status);
+        context.log('Azure response status:', initialResponse.statusCode);
 
-        if (response.status !== 202) {
-            throw new Error(`Azure API returned ${response.status}: ${response.statusText}`);
+        if (initialResponse.statusCode !== 202) {
+            throw new Error(`Azure API returned ${initialResponse.statusCode}: ${initialResponse.statusMessage}`);
         }
 
-        const operationLocation = response.headers['operation-location'];
+        const operationLocation = initialResponse.headers['operation-location'];
         if (!operationLocation) {
             throw new Error('No operation location received from Azure API');
         }
@@ -279,14 +187,18 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
         while (attempts < maxAttempts) {
             await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
             
-            const pollResponse = await axios.get(operationLocation, {
+            const pollResponse = await makeHttpsRequest(operationLocation, {
+                method: 'GET',
                 headers: {
                     'Ocp-Apim-Subscription-Key': apiKey,
-                },
-                timeout: 10000
+                }
             });
 
-            result = pollResponse.data;
+            if (pollResponse.statusCode !== 200) {
+                throw new Error(`Polling failed with status ${pollResponse.statusCode}`);
+            }
+
+            result = JSON.parse(pollResponse.body);
             
             if (result.status === 'succeeded') {
                 context.log('Analysis completed successfully');
@@ -300,7 +212,7 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
         }
 
         if (!result || result.status !== 'succeeded') {
-            throw new Error('Analysis timed out');
+            throw new Error('Analysis timed out after 40 seconds');
         }
 
         // Convert to expected format
@@ -348,41 +260,56 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
         
     } catch (apiError) {
         context.log('Azure API error:', apiError.message);
-        
-        // Return a fallback mock response if API fails
-        return {
-            id: 'fallback-mock-id',
-            status: 'Succeeded',
-            result: {
-                analyzerId: 'fallback-mock',
-                apiVersion: 'fallback',
-                createdAt: new Date().toISOString(),
-                warnings: [`API Error: ${apiError.message}`],
-                contents: [{
-                    fields: {
-                        ui_text: {
-                            type: 'array',
-                            valueArray: [{
-                                type: 'object',
-                                valueObject: {
-                                    role: { type: 'string', valueString: 'body' },
-                                    text: { type: 'string', valueString: `Mock fallback result (API failed: ${apiError.message})` },
-                                    count: { type: 'number', valueNumber: 50 },
-                                    description: { type: 'string', valueString: 'Fallback mock data due to API error' }
-                                }
-                            }]
-                        },
-                        mockup_summary: {
-                            type: 'string',
-                            valueString: 'Fallback mock data due to Azure API error'
-                        },
-                        experience_archetype: {
-                            type: 'string',
-                            valueString: 'api_error_fallback'
-                        }
-                    }
-                }]
-            }
-        };
+        throw new Error(`Azure Content Understanding API failed: ${apiError.message}`);
     }
+}
+
+function makeHttpsRequest(urlString, options) {
+    return new Promise((resolve, reject) => {
+        const https = require('https');
+        const url = require('url');
+        
+        const parsedUrl = new url.URL(urlString);
+        
+        const requestOptions = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: options.method || 'GET',
+            headers: options.headers || {},
+            timeout: 30000
+        };
+
+        const req = https.request(requestOptions, (res) => {
+            let body = '';
+            
+            res.on('data', (chunk) => {
+                body += chunk;
+            });
+            
+            res.on('end', () => {
+                resolve({
+                    statusCode: res.statusCode,
+                    statusMessage: res.statusMessage,
+                    headers: res.headers,
+                    body: body
+                });
+            });
+        });
+
+        req.on('error', (error) => {
+            reject(error);
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
+
+        if (options.body) {
+            req.write(options.body);
+        }
+        
+        req.end();
+    });
 }
