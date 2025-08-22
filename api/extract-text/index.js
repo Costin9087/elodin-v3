@@ -143,125 +143,180 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
     try {
         context.log('Calling Azure Content Understanding API...');
         
-        const apiVersion = '2023-07-31';
+        // Try multiple API versions and endpoints until one works
+        const apiVersions = ['2023-07-31', '2022-08-31', '2024-02-29-preview', '2023-10-31-preview'];
+        const endpointPaths = [
+            'formrecognizer/documentModels/prebuilt-layout:analyze',
+            'documentintelligence/documentModels/prebuilt-layout:analyze',
+            'formrecognizer/v2.1/layout/analyze'
+        ];
         
-        let analyzeUrl;
-        if (endpoint.includes('cognitiveservices.azure.com')) {
-            // Form Recognizer API format
-            analyzeUrl = `${endpoint.replace(/\/$/, '')}/formrecognizer/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}`;
-        } else {
-            // Document Intelligence API format  
-            analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=${apiVersion}`;
-        }
+        let lastError;
+        for (const apiVersion of apiVersions) {
+            for (const path of endpointPaths) {
+                try {
+                    let analyzeUrl;
+                    if (path.includes('v2.1')) {
+                        // v2.1 doesn't use query parameters the same way
+                        analyzeUrl = `${endpoint.replace(/\/$/, '')}/${path}`;
+                    } else {
+                        analyzeUrl = `${endpoint.replace(/\/$/, '')}/${path}?api-version=${apiVersion}`;
+                    }
+                    
+                    context.log(`Trying ${apiVersion} with ${path}...`);
+                    context.log('URL:', analyzeUrl);
         
-        context.log('Sending request to:', analyzeUrl);
+                    // Start the analysis using built-in https module
+                    const initialResponse = await makeHttpsRequest(analyzeUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'Ocp-Apim-Subscription-Key': apiKey,
+                        },
+                        body: imageBuffer
+                    });
 
-        // Start the analysis using built-in https module
-        const initialResponse = await makeHttpsRequest(analyzeUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/octet-stream',
-                'Ocp-Apim-Subscription-Key': apiKey,
-            },
-            body: imageBuffer
-        });
+                    context.log('Azure response status:', initialResponse.statusCode);
 
-        context.log('Azure response status:', initialResponse.statusCode);
-
-        if (initialResponse.statusCode !== 202) {
-            throw new Error(`Azure API returned ${initialResponse.statusCode}: ${initialResponse.statusMessage}`);
-        }
-
-        const operationLocation = initialResponse.headers['operation-location'];
-        if (!operationLocation) {
-            throw new Error('No operation location received from Azure API');
-        }
-
-        context.log('Analysis started, polling for results...');
-
-        // Poll for results
-        let result;
-        let attempts = 0;
-        const maxAttempts = 20; // 40 seconds max wait time
-        
-        while (attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-            
-            const pollResponse = await makeHttpsRequest(operationLocation, {
-                method: 'GET',
-                headers: {
-                    'Ocp-Apim-Subscription-Key': apiKey,
+                    if (initialResponse.statusCode === 202) {
+                        // Success! Continue with this endpoint
+                        context.log(`Success with ${apiVersion} and ${path}`);
+                        return await pollForResults(initialResponse.headers['operation-location'], apiKey, context, apiVersion);
+                    } else if (initialResponse.statusCode === 200) {
+                        // Synchronous response (v2.1)
+                        context.log('Got synchronous response');
+                        const result = JSON.parse(initialResponse.body);
+                        return convertAzureResultToExpectedFormat(result, apiVersion);
+                    } else {
+                        throw new Error(`Status ${initialResponse.statusCode}: ${initialResponse.statusMessage}`);
+                    }
+                } catch (apiError) {
+                    lastError = apiError;
+                    context.log(`Failed with ${apiVersion}/${path}: ${apiError.message}`);
+                    continue; // Try next combination
                 }
-            });
-
-            if (pollResponse.statusCode !== 200) {
-                throw new Error(`Polling failed with status ${pollResponse.statusCode}`);
-            }
-
-            result = JSON.parse(pollResponse.body);
-            
-            if (result.status === 'succeeded') {
-                context.log('Analysis completed successfully');
-                break;
-            } else if (result.status === 'failed') {
-                throw new Error(`Analysis failed: ${result.error?.message || 'Unknown error'}`);
-            }
-            
-            attempts++;
-            context.log(`Polling attempt ${attempts}, status: ${result.status}`);
-        }
-
-        if (!result || result.status !== 'succeeded') {
-            throw new Error('Analysis timed out after 40 seconds');
-        }
-
-        // Convert to expected format
-        const textElements = [];
-        if (result.analyzeResult?.paragraphs) {
-            for (const paragraph of result.analyzeResult.paragraphs) {
-                textElements.push({
-                    type: 'object',
-                    valueObject: {
-                        role: { type: 'string', valueString: 'body' },
-                        text: { type: 'string', valueString: paragraph.content },
-                        count: { type: 'number', valueNumber: paragraph.content.length },
-                        description: { type: 'string', valueString: 'Extracted paragraph content' }
-                    }
-                });
             }
         }
-
-        return {
-            id: result.operationId || 'azure-api-result',
-            status: 'Succeeded',
-            result: {
-                analyzerId: 'form-recognizer',
-                apiVersion: apiVersion,
-                createdAt: new Date().toISOString(),
-                warnings: [],
-                contents: [{
-                    fields: {
-                        ui_text: {
-                            type: 'array',
-                            valueArray: textElements
-                        },
-                        mockup_summary: {
-                            type: 'string',
-                            valueString: 'Text extracted using Form Recognizer API'
-                        },
-                        experience_archetype: {
-                            type: 'string',
-                            valueString: 'document_content'
-                        }
-                    }
-                }]
-            }
-        };
         
+        // All attempts failed
+        throw new Error(`All API versions failed. Last error: ${lastError.message}`);
+
     } catch (apiError) {
         context.log('Azure API error:', apiError.message);
         throw new Error(`Azure Content Understanding API failed: ${apiError.message}`);
     }
+}
+
+async function pollForResults(operationLocation, apiKey, context, apiVersion) {
+    if (!operationLocation) {
+        throw new Error('No operation location received from Azure API');
+    }
+
+    context.log('Analysis started, polling for results...');
+
+    // Poll for results
+    let result;
+    let attempts = 0;
+    const maxAttempts = 20; // 40 seconds max wait time
+    
+    while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        
+        const pollResponse = await makeHttpsRequest(operationLocation, {
+            method: 'GET',
+            headers: {
+                'Ocp-Apim-Subscription-Key': apiKey,
+            }
+        });
+
+        if (pollResponse.statusCode !== 200) {
+            throw new Error(`Polling failed with status ${pollResponse.statusCode}`);
+        }
+
+        result = JSON.parse(pollResponse.body);
+        
+        if (result.status === 'succeeded') {
+            context.log('Analysis completed successfully');
+            break;
+        } else if (result.status === 'failed') {
+            throw new Error(`Analysis failed: ${result.error?.message || 'Unknown error'}`);
+        }
+        
+        attempts++;
+        context.log(`Polling attempt ${attempts}, status: ${result.status}`);
+    }
+
+    if (!result || result.status !== 'succeeded') {
+        throw new Error('Analysis timed out after 40 seconds');
+    }
+
+    return convertAzureResultToExpectedFormat(result, apiVersion);
+}
+
+function convertAzureResultToExpectedFormat(result, apiVersion) {
+    // Convert to expected format
+    const textElements = [];
+    
+    // Handle different response formats
+    if (result.analyzeResult?.paragraphs) {
+        // v3.x format
+        for (const paragraph of result.analyzeResult.paragraphs) {
+            textElements.push({
+                type: 'object',
+                valueObject: {
+                    role: { type: 'string', valueString: 'body' },
+                    text: { type: 'string', valueString: paragraph.content },
+                    count: { type: 'number', valueNumber: paragraph.content.length },
+                    description: { type: 'string', valueString: 'Extracted paragraph content' }
+                }
+            });
+        }
+    } else if (result.analyzeResult?.readResults) {
+        // v2.x format
+        for (const page of result.analyzeResult.readResults) {
+            if (page.lines) {
+                for (const line of page.lines) {
+                    textElements.push({
+                        type: 'object',
+                        valueObject: {
+                            role: { type: 'string', valueString: 'body' },
+                            text: { type: 'string', valueString: line.text },
+                            count: { type: 'number', valueNumber: line.text.length },
+                            description: { type: 'string', valueString: 'Extracted text content' }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    return {
+        id: result.operationId || 'azure-api-result',
+        status: 'Succeeded',
+        result: {
+            analyzerId: 'form-recognizer',
+            apiVersion: apiVersion,
+            createdAt: new Date().toISOString(),
+            warnings: [],
+            contents: [{
+                fields: {
+                    ui_text: {
+                        type: 'array',
+                        valueArray: textElements
+                    },
+                    mockup_summary: {
+                        type: 'string',
+                        valueString: 'Text extracted using Azure API'
+                    },
+                    experience_archetype: {
+                        type: 'string',
+                        valueString: 'document_content'
+                    }
+                }
+            }]
+        }
+    };
+
 }
 
 function makeHttpsRequest(urlString, options) {
