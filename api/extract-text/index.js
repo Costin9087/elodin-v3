@@ -56,25 +56,52 @@ module.exports = async function (context, req) {
         // Handle POST request with image upload
         context.log('Processing image upload request...');
         
-        // Get the image from the request
+        // Get the image from the request with detailed debugging
         let imageBuffer;
+        
+        context.log('Request debugging info:', {
+            method: req.method,
+            hasBody: !!req.body,
+            hasRawBody: !!req.rawBody,
+            bodyType: typeof req.body,
+            bodyKeys: req.body ? Object.keys(req.body) : null,
+            contentType: req.headers['content-type'],
+            contentLength: req.headers['content-length']
+        });
         
         // Try to get image from req.body (multipart form data)
         if (req.body && req.body.image) {
-            context.log('Found image in req.body.image');
+            context.log('Found image in req.body.image, type:', typeof req.body.image);
             if (Buffer.isBuffer(req.body.image)) {
                 imageBuffer = req.body.image;
+                context.log('Using image buffer directly from req.body.image');
             } else if (typeof req.body.image === 'string') {
+                context.log('Converting string image data to buffer');
                 // Try base64 decode
                 try {
                     imageBuffer = Buffer.from(req.body.image, 'base64');
+                    context.log('Successfully decoded base64 image');
                 } catch (e) {
                     imageBuffer = Buffer.from(req.body.image);
+                    context.log('Using string as raw buffer');
                 }
+            } else if (req.body.image.data) {
+                // Sometimes the image comes as an object with data property
+                context.log('Found image.data object');
+                imageBuffer = Buffer.from(req.body.image.data);
             }
         } else if (req.rawBody) {
-            context.log('Found image in req.rawBody');
+            context.log('Found image in req.rawBody, type:', typeof req.rawBody);
             imageBuffer = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
+        } else if (req.body && typeof req.body === 'string') {
+            context.log('Request body is a string, trying to parse as image data');
+            try {
+                imageBuffer = Buffer.from(req.body, 'base64');
+                context.log('Successfully parsed body as base64 image');
+            } catch (e) {
+                imageBuffer = Buffer.from(req.body);
+                context.log('Using body string as raw buffer');
+            }
         } else {
             context.res = {
                 status: 400,
@@ -84,7 +111,9 @@ module.exports = async function (context, req) {
                     details: {
                         method: req.method,
                         hasBody: !!req.body,
-                        hasRawBody: !!req.rawBody
+                        hasRawBody: !!req.rawBody,
+                        bodyType: typeof req.body,
+                        contentType: req.headers['content-type']
                     }
                 },
                 headers: {
@@ -94,7 +123,34 @@ module.exports = async function (context, req) {
             return;
         }
         
-        context.log(`Image buffer created, size: ${imageBuffer.length} bytes`);
+        if (!imageBuffer || imageBuffer.length === 0) {
+            context.res = {
+                status: 400,
+                body: {
+                    error: 'Invalid image data',
+                    message: 'Image buffer is empty or invalid',
+                    details: {
+                        bufferLength: imageBuffer ? imageBuffer.length : 0,
+                        bufferType: typeof imageBuffer
+                    }
+                },
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            return;
+        }
+        
+        context.log(`Image buffer created successfully, size: ${imageBuffer.length} bytes`);
+        
+        // Validate image buffer (basic checks)
+        if (imageBuffer.length < 100) {
+            context.log('Warning: Image buffer seems very small, might not be a valid image');
+        }
+        
+        // Check for common image signatures
+        const isValidImage = checkImageSignature(imageBuffer);
+        context.log('Image signature validation:', isValidImage);
         
         // Call Azure Content Understanding API
         const extractionResult = await callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, context);
@@ -167,16 +223,23 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
                     context.log('URL:', analyzeUrl);
         
                     // Start the analysis using built-in https module
+                    context.log(`Sending ${imageBuffer.length} bytes to Azure...`);
                     const initialResponse = await makeHttpsRequest(analyzeUrl, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/octet-stream',
                             'Ocp-Apim-Subscription-Key': apiKey,
+                            'Content-Length': imageBuffer.length.toString()
                         },
                         body: imageBuffer
                     });
 
-                    context.log('Azure response status:', initialResponse.statusCode);
+                    context.log('Azure response:', {
+                        status: initialResponse.statusCode,
+                        statusMessage: initialResponse.statusMessage,
+                        headers: Object.keys(initialResponse.headers || {}),
+                        bodyPreview: initialResponse.body ? initialResponse.body.substring(0, 200) : 'empty'
+                    });
 
                     if (initialResponse.statusCode === 202) {
                         // Success! Continue with this endpoint
@@ -188,7 +251,14 @@ async function callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, c
                         const result = JSON.parse(initialResponse.body);
                         return convertAzureResultToExpectedFormat(result, apiVersion);
                     } else {
-                        throw new Error(`Status ${initialResponse.statusCode}: ${initialResponse.statusMessage}`);
+                        // Log detailed error information for debugging
+                        context.log('Azure API error details:', {
+                            status: initialResponse.statusCode,
+                            statusMessage: initialResponse.statusMessage,
+                            body: initialResponse.body,
+                            headers: initialResponse.headers
+                        });
+                        throw new Error(`Status ${initialResponse.statusCode}: ${initialResponse.statusMessage}. Response: ${initialResponse.body}`);
                     }
                 } catch (apiError) {
                     lastError = apiError;
@@ -317,6 +387,37 @@ function convertAzureResultToExpectedFormat(result, apiVersion) {
         }
     };
 
+}
+
+function checkImageSignature(buffer) {
+    if (!buffer || buffer.length < 4) {
+        return { valid: false, reason: 'Buffer too small' };
+    }
+    
+    // Check for common image signatures
+    const signatures = {
+        'JPEG': [0xFF, 0xD8, 0xFF],
+        'PNG': [0x89, 0x50, 0x4E, 0x47],
+        'GIF': [0x47, 0x49, 0x46],
+        'BMP': [0x42, 0x4D],
+        'WEBP': [0x52, 0x49, 0x46, 0x46], // First 4 bytes, WEBP has WEBP at offset 8
+        'PDF': [0x25, 0x50, 0x44, 0x46]
+    };
+    
+    for (const [format, signature] of Object.entries(signatures)) {
+        if (signature.every((byte, index) => buffer[index] === byte)) {
+            return { valid: true, format: format };
+        }
+    }
+    
+    // Check WEBP more thoroughly (RIFF....WEBP)
+    if (buffer.length >= 12 && 
+        buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+        buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+        return { valid: true, format: 'WEBP' };
+    }
+    
+    return { valid: false, reason: 'Unknown format', firstBytes: Array.from(buffer.slice(0, 8)) };
 }
 
 function makeHttpsRequest(urlString, options) {
