@@ -175,7 +175,22 @@ function App() {
       }
       
       // Extract the actual review data from the API response
-      const reviewData = reviewResults.success ? reviewResults.data : reviewResults;
+      let reviewData = reviewResults.success ? reviewResults.data : reviewResults;
+      
+      // Transform new Prompt Flow format to expected ReviewResult format
+      if (reviewData && reviewData.items && Array.isArray(reviewData.items)) {
+        reviewData = reviewData.items.map((item: any) => ({
+          original: item.original || '',
+          rewritten: item.suggestion || item.original || '',
+          changes: item.suggestion && item.suggestion !== item.original ? [item.suggestion] : [],
+          rationale: item.rationale || '',
+          type: item.role || 'body'
+        }));
+      } else if (!Array.isArray(reviewData)) {
+        // Fallback for unexpected data structure
+        reviewData = [];
+      }
+      
       setReviewResults(reviewData)
       setDebugInfo(debugInfo)
       setCurrentStep('results')
