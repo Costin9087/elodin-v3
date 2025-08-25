@@ -91,7 +91,20 @@ function App() {
           error: `HTTP ${extractResponse.status}: ${extractResponse.statusText}`,
           response: contentUnderstandingData
         }
-        throw new Error('Content Understanding API failed')
+        
+        // Provide more user-friendly error messages
+        let userMessage = 'Content Understanding API failed';
+        if (contentUnderstandingData?.message) {
+          userMessage = contentUnderstandingData.message;
+        } else if (extractResponse.status === 400) {
+          userMessage = 'Invalid file format or corrupted file. Please try a different image.';
+        } else if (extractResponse.status === 413) {
+          userMessage = 'File is too large. Please use a file smaller than 10MB.';
+        } else if (extractResponse.status === 503) {
+          userMessage = 'Service temporarily unavailable. Please try again later.';
+        }
+        
+        throw new Error(userMessage)
       }
 
       debugInfo.contentUnderstanding = {

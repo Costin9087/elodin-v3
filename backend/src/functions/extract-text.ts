@@ -1,5 +1,73 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 
+interface FileSignatureResult {
+    isValid: boolean;
+    detectedType?: string;
+    reason?: string;
+}
+
+function validateFileSignature(buffer: Buffer, fileName: string, mimeType: string): FileSignatureResult {
+    if (buffer.length < 4) {
+        return { isValid: false, reason: 'File is too small to validate' };
+    }
+    
+    const firstBytes = buffer.subarray(0, 16);
+    
+    // Common file signatures
+    const signatures = {
+        'image/jpeg': [
+            [0xFF, 0xD8, 0xFF], // JPEG
+        ],
+        'image/png': [
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] // PNG
+        ],
+        'image/bmp': [
+            [0x42, 0x4D] // BMP
+        ],
+        'image/tiff': [
+            [0x49, 0x49, 0x2A, 0x00], // TIFF little endian
+            [0x4D, 0x4D, 0x00, 0x2A]  // TIFF big endian
+        ],
+        'application/pdf': [
+            [0x25, 0x50, 0x44, 0x46] // PDF
+        ]
+    };
+    
+    // Check if the file signature matches expected type
+    const expectedSignatures = signatures[mimeType as keyof typeof signatures];
+    if (expectedSignatures) {
+        for (const signature of expectedSignatures) {
+            const matches = signature.every((byte, index) => 
+                index < firstBytes.length && firstBytes[index] === byte
+            );
+            if (matches) {
+                return { isValid: true, detectedType: mimeType };
+            }
+        }
+    }
+    
+    // Try to detect what file type it actually is
+    for (const [type, typeSignatures] of Object.entries(signatures)) {
+        for (const signature of typeSignatures) {
+            const matches = signature.every((byte, index) => 
+                index < firstBytes.length && firstBytes[index] === byte
+            );
+            if (matches) {
+                return { 
+                    isValid: false, 
+                    detectedType: type,
+                    reason: `File appears to be ${type} but was uploaded as ${mimeType}. Please ensure the file extension matches the actual file type.`
+                };
+            }
+        }
+    }
+    
+    return { 
+        isValid: false, 
+        reason: 'File signature does not match any supported format. The file may be corrupted or in an unsupported format.'
+    };
+}
+
 export async function extractText(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
     try {
         context.log('HTTP trigger function processed a request.');
@@ -104,6 +172,63 @@ export async function extractText(request: HttpRequest, context: InvocationConte
             };
         }
 
+        // Validate file type and size
+        const supportedTypes = [
+            'image/jpeg',
+            'image/jpg', 
+            'image/png',
+            'image/bmp',
+            'image/tiff',
+            'image/tif',
+            'application/pdf'
+        ];
+        
+        const isSupported = supportedTypes.includes(imageFile.type.toLowerCase()) ||
+            supportedTypes.some(type => imageFile.name.toLowerCase().endsWith(type.split('/')[1]));
+        
+        if (!isSupported) {
+            return {
+                status: 400,
+                jsonBody: {
+                    error: 'Unsupported file format',
+                    message: 'Please upload a file in one of these formats: JPEG, PNG, BMP, PDF, or TIFF',
+                    details: {
+                        uploadedType: imageFile.type,
+                        fileName: imageFile.name,
+                        supportedFormats: ['JPEG', 'PNG', 'BMP', 'PDF', 'TIFF']
+                    }
+                }
+            };
+        }
+        
+        // Check file size (10MB limit)
+        const maxSize = 10 * 1024 * 1024; // 10MB
+        if (imageFile.size > maxSize) {
+            return {
+                status: 400,
+                jsonBody: {
+                    error: 'File too large',
+                    message: 'File size must be less than 10MB',
+                    details: {
+                        fileSize: imageFile.size,
+                        maxSize: maxSize,
+                        fileSizeMB: Math.round(imageFile.size / (1024 * 1024) * 100) / 100
+                    }
+                }
+            };
+        }
+        
+        // Check if file is not empty
+        if (imageFile.size === 0) {
+            return {
+                status: 400,
+                jsonBody: {
+                    error: 'Empty file',
+                    message: 'The uploaded file appears to be empty. Please select a valid file.'
+                }
+            };
+        }
+
         context.log(`Processing image: ${imageFile.name}, Size: ${imageFile.size}, Type: ${imageFile.type}`);
 
         // Convert File to Buffer for Azure service
@@ -111,6 +236,39 @@ export async function extractText(request: HttpRequest, context: InvocationConte
         const buffer = Buffer.from(arrayBuffer);
 
         context.log(`Image buffer created, size: ${buffer.length} bytes`);
+        
+        // Basic validation of file content
+        if (buffer.length === 0) {
+            return {
+                status: 400,
+                jsonBody: {
+                    error: 'Empty file buffer',
+                    message: 'The file could not be read properly. Please try uploading again.'
+                }
+            };
+        }
+        
+        // Log first few bytes to help debug file format issues
+        const firstBytes = buffer.subarray(0, Math.min(16, buffer.length));
+        context.log(`File header bytes: ${Array.from(firstBytes).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+        
+        // Basic file signature validation
+        const fileSignature = validateFileSignature(buffer, imageFile.name, imageFile.type);
+        if (!fileSignature.isValid) {
+            context.log(`File signature validation failed: ${fileSignature.reason}`);
+            return {
+                status: 400,
+                jsonBody: {
+                    error: 'Invalid file format',
+                    message: fileSignature.reason || 'The file format could not be verified. Please ensure you are uploading a valid image file.',
+                    details: {
+                        fileName: imageFile.name,
+                        detectedType: fileSignature.detectedType,
+                        expectedType: imageFile.type
+                    }
+                }
+            };
+        }
 
         // Extract text using Azure Content Understanding
         const extractionResult = await extractTextFromImage(buffer);

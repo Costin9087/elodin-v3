@@ -63,7 +63,21 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
     });
 
     if (response.status !== 202) {
-      throw new Error(`Azure Content Understanding API returned ${response.status}: ${response.statusText}. Response: ${JSON.stringify(response.data)}`);
+      // Handle specific Azure error responses
+      let errorMessage = `Azure Content Understanding API failed: Status ${response.status}: ${response.statusText}`;
+      
+      if (response.data && response.data.error) {
+        const azureError = response.data.error;
+        if (azureError.code === 'InvalidImage') {
+          errorMessage = `Invalid image file: ${azureError.message}. Please ensure your file is a valid JPEG, PNG, BMP, PDF, or TIFF image that is not corrupted or password protected.`;
+        } else if (azureError.code === 'InvalidRequest') {
+          errorMessage = `Invalid request: ${azureError.message}. Please check your file format and try again.`;
+        } else {
+          errorMessage = `Azure API Error (${azureError.code}): ${azureError.message}`;
+        }
+      }
+      
+      throw new Error(errorMessage);
     }
 
     const operationLocation = response.headers['operation-location'];
@@ -137,10 +151,13 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
 
   } catch (error) {
     console.error('Azure Document Intelligence Layout API error:', error);
+    
+    let errorDetails = '';
     if (axios.isAxiosError(error)) {
       console.error('Response status:', error.response?.status);
       console.error('Response data:', error.response?.data);
       console.error('Response headers:', error.response?.headers);
+      errorDetails = ` Response: ${JSON.stringify(error.response?.data)}`;
     }
     
     // Try fallback to basic read API
@@ -156,8 +173,14 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<any> {
         return await tryFormRecognizerAPI(imageBuffer, endpoint, apiKey);
       } catch (formRecognizerError) {
         console.error('Form Recognizer API also failed:', formRecognizerError);
-        // Re-throw the original error
-        throw error;
+        
+        // Create a comprehensive error message that includes all failed attempts
+        let finalError = error instanceof Error ? error.message : String(error);
+        if (finalError.includes('InvalidImage') || finalError.includes('Bad Request')) {
+          finalError = `Azure Content Understanding API failed: All API versions failed. Last error: ${finalError}${errorDetails}`;
+        }
+        
+        throw new Error(finalError);
       }
     }
   }

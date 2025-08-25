@@ -32,11 +32,42 @@ const UploadStep: React.FC<UploadStepProps> = ({ onFileUpload, isProcessing }) =
   }
 
   const handleFileSelection = (file: File) => {
-    if (file.type.startsWith('image/')) {
-      onFileUpload(file)
-    } else {
-      alert('Please select an image file (PNG, JPG, GIF)')
+    // Azure Content Understanding supported formats: JPEG, PNG, BMP, PDF, TIFF
+    const supportedTypes = [
+      'image/jpeg',
+      'image/jpg', 
+      'image/png',
+      'image/bmp',
+      'image/tiff',
+      'image/tif',
+      'application/pdf'
+    ]
+    
+    // Check file type
+    const isSupported = supportedTypes.some(type => 
+      file.type.toLowerCase() === type || 
+      file.name.toLowerCase().endsWith(type.split('/')[1])
+    )
+    
+    if (!isSupported) {
+      alert('Please select a supported file format: JPEG, PNG, BMP, PDF, or TIFF')
+      return
     }
+    
+    // Check file size (10MB limit)
+    const maxSize = 10 * 1024 * 1024 // 10MB in bytes
+    if (file.size > maxSize) {
+      alert('File size must be less than 10MB')
+      return
+    }
+    
+    // Check if file is not empty
+    if (file.size === 0) {
+      alert('File appears to be empty. Please select a valid file.')
+      return
+    }
+    
+    onFileUpload(file)
   }
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -86,7 +117,7 @@ const UploadStep: React.FC<UploadStepProps> = ({ onFileUpload, isProcessing }) =
               Click to upload or drag and drop
             </p>
             <p className="text-sm text-gray-400">
-              PNG, JPG, GIF up to 10MB
+              JPEG, PNG, BMP, PDF, TIFF up to 10MB
             </p>
           </div>
         </div>
@@ -94,7 +125,7 @@ const UploadStep: React.FC<UploadStepProps> = ({ onFileUpload, isProcessing }) =
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/jpg,image/png,image/bmp,image/tiff,application/pdf"
           onChange={handleFileInputChange}
           className="hidden"
         />
