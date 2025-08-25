@@ -37,6 +37,11 @@ function App() {
   const handleFileUpload = async (file: File) => {
     setIsProcessing(true)
     
+    // Give user feedback for large files
+    if (file.size > 2 * 1024 * 1024) { // > 2MB
+      console.log('Large file detected - this may take 1-2 minutes to process completely')
+    }
+    
     // Create a URL for the uploaded image to display later
     const imageUrl = URL.createObjectURL(file)
     setUploadedImageUrl(imageUrl)

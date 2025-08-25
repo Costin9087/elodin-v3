@@ -72,11 +72,44 @@ module.exports = async function (context, req) {
 
         context.log('Processing content understanding data for review...');
 
+        // Check text size and apply intelligent chunking for large content
+        const analysisString = JSON.stringify(contentUnderstandingData);
+        const textSize = analysisString.length;
+        context.log(`Analysis data size: ${textSize} characters`);
+
+        // If content is very large (>50KB), limit to first 20 text elements to prevent timeout
+        let processedData = contentUnderstandingData;
+        if (textSize > 50000 && contentUnderstandingData.result && contentUnderstandingData.result.contents) {
+            context.log('Large content detected, applying intelligent chunking...');
+            processedData = {
+                ...contentUnderstandingData,
+                result: {
+                    ...contentUnderstandingData.result,
+                    contents: contentUnderstandingData.result.contents.map(content => {
+                        if (content.fields && content.fields.ui_text && content.fields.ui_text.valueArray) {
+                            return {
+                                ...content,
+                                fields: {
+                                    ...content.fields,
+                                    ui_text: {
+                                        ...content.fields.ui_text,
+                                        valueArray: content.fields.ui_text.valueArray.slice(0, 20) // Limit to first 20 elements
+                                    }
+                                }
+                            };
+                        }
+                        return content;
+                    })
+                }
+            };
+            context.log(`Chunked to ${JSON.stringify(processedData).length} characters (from ${textSize})`);
+        }
+
         // Prepare the input data for Prompt Flow
         const inputData = {
-            mockup_analysis: JSON.stringify(contentUnderstandingData),
+            mockup_analysis: JSON.stringify(processedData),
             styleguide: getElsevierStyleGuide(),
-            context: "no context available"
+            context: textSize > 50000 ? "Large image processed - showing priority text elements" : "no context available"
         };
 
         context.log('Calling Azure Prompt Flow...');
@@ -91,7 +124,7 @@ module.exports = async function (context, req) {
                     'Content-Type': 'application/json',
                     'azureml-model-deployment': deployment
                 },
-                timeout: 30000 // 30 second timeout for Azure Static Web Apps
+                timeout: 120000 // 2 minute timeout for complex Prompt Flow analysis
             }
         );
 
