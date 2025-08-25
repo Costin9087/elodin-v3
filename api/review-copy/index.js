@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 module.exports = async function (context, req) {
-    context.log('Review copy function called');
+    context.log('Review copy function called - v2');
     
     try {
         // Check environment variables first
