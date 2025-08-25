@@ -19,10 +19,11 @@ module.exports = async function (context, req) {
                 status: 503,
                 body: {
                     error: 'Azure Content Understanding not configured',
-                    message: 'Azure service credentials not found in environment variables',
+                    message: 'Azure service credentials not found in environment variables. Please configure AZURE_FORM_RECOGNIZER_ENDPOINT and AZURE_FORM_RECOGNIZER_KEY in your Azure Static Web App configuration.',
                     details: {
                         hasEndpoint: !!endpoint,
-                        hasApiKey: !!apiKey
+                        hasApiKey: !!apiKey,
+                        note: 'Environment variables must be set in Azure Static Web Apps portal, not in code.'
                     }
                 },
                 headers: {
@@ -143,14 +144,69 @@ module.exports = async function (context, req) {
         
         context.log(`Image buffer created successfully, size: ${imageBuffer.length} bytes`);
         
+        // Validate image buffer size (Azure limit is 10MB)
+        const maxSize = 10 * 1024 * 1024; // 10MB
+        if (imageBuffer.length > maxSize) {
+            context.res = {
+                status: 400,
+                body: {
+                    error: 'File too large',
+                    message: 'File size must be less than 10MB',
+                    details: {
+                        fileSize: imageBuffer.length,
+                        maxSize: maxSize,
+                        fileSizeMB: Math.round(imageBuffer.length / (1024 * 1024) * 100) / 100
+                    }
+                },
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            return;
+        }
+        
         // Validate image buffer (basic checks)
         if (imageBuffer.length < 100) {
             context.log('Warning: Image buffer seems very small, might not be a valid image');
+            context.res = {
+                status: 400,
+                body: {
+                    error: 'File too small',
+                    message: 'The uploaded file appears to be too small to be a valid image',
+                    details: {
+                        fileSize: imageBuffer.length,
+                        minimumSize: 100
+                    }
+                },
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            return;
         }
         
         // Check for common image signatures
         const isValidImage = checkImageSignature(imageBuffer);
         context.log('Image signature validation:', isValidImage);
+        
+        if (!isValidImage.valid) {
+            context.res = {
+                status: 400,
+                body: {
+                    error: 'Invalid file format',
+                    message: 'The uploaded file does not appear to be a valid image format supported by Azure Content Understanding (JPEG, PNG, BMP, PDF, TIFF)',
+                    details: {
+                        reason: isValidImage.reason,
+                        supportedFormats: ['JPEG', 'PNG', 'BMP', 'PDF', 'TIFF'],
+                        detectedBytes: isValidImage.firstBytes
+                    }
+                },
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            return;
+        }
         
         // Call Azure Content Understanding API
         const extractionResult = await callAzureContentUnderstandingAPI(imageBuffer, endpoint, apiKey, context);
@@ -394,30 +450,41 @@ function checkImageSignature(buffer) {
         return { valid: false, reason: 'Buffer too small' };
     }
     
-    // Check for common image signatures
-    const signatures = {
+    // Check for Azure Content Understanding supported formats only: JPEG, PNG, BMP, PDF, TIFF
+    const supportedSignatures = {
         'JPEG': [0xFF, 0xD8, 0xFF],
         'PNG': [0x89, 0x50, 0x4E, 0x47],
-        'GIF': [0x47, 0x49, 0x46],
         'BMP': [0x42, 0x4D],
-        'WEBP': [0x52, 0x49, 0x46, 0x46], // First 4 bytes, WEBP has WEBP at offset 8
-        'PDF': [0x25, 0x50, 0x44, 0x46]
+        'PDF': [0x25, 0x50, 0x44, 0x46],
+        'TIFF_LE': [0x49, 0x49, 0x2A, 0x00], // TIFF little endian
+        'TIFF_BE': [0x4D, 0x4D, 0x00, 0x2A]  // TIFF big endian
     };
     
-    for (const [format, signature] of Object.entries(signatures)) {
+    for (const [format, signature] of Object.entries(supportedSignatures)) {
         if (signature.every((byte, index) => buffer[index] === byte)) {
-            return { valid: true, format: format };
+            return { valid: true, format: format.replace('_LE', '').replace('_BE', '') };
         }
     }
     
-    // Check WEBP more thoroughly (RIFF....WEBP)
-    if (buffer.length >= 12 && 
-        buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
-        buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
-        return { valid: true, format: 'WEBP' };
+    // Check for unsupported but common formats to give better error messages
+    const unsupportedSignatures = {
+        'GIF': [0x47, 0x49, 0x46],
+        'WEBP': [0x52, 0x49, 0x46, 0x46] // Check WEBP
+    };
+    
+    for (const [format, signature] of Object.entries(unsupportedSignatures)) {
+        if (signature.every((byte, index) => buffer[index] === byte)) {
+            // Special check for WEBP
+            if (format === 'WEBP' && buffer.length >= 12 &&
+                buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+                return { valid: false, reason: `${format} format is not supported by Azure Content Understanding. Please convert to JPEG, PNG, BMP, PDF, or TIFF.`, firstBytes: Array.from(buffer.slice(0, 8)) };
+            } else if (format !== 'WEBP') {
+                return { valid: false, reason: `${format} format is not supported by Azure Content Understanding. Please convert to JPEG, PNG, BMP, PDF, or TIFF.`, firstBytes: Array.from(buffer.slice(0, 8)) };
+            }
+        }
     }
     
-    return { valid: false, reason: 'Unknown format', firstBytes: Array.from(buffer.slice(0, 8)) };
+    return { valid: false, reason: 'Unknown or unsupported file format. Azure Content Understanding supports JPEG, PNG, BMP, PDF, and TIFF only.', firstBytes: Array.from(buffer.slice(0, 8)) };
 }
 
 function makeHttpsRequest(urlString, options) {
