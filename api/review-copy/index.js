@@ -91,7 +91,7 @@ module.exports = async function (context, req) {
                     'Content-Type': 'application/json',
                     'azureml-model-deployment': deployment
                 },
-                timeout: 60000 // 60 second timeout for Prompt Flow
+                timeout: 30000 // 30 second timeout for Azure Static Web Apps
             }
         );
 
