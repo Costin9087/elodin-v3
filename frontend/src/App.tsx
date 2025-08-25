@@ -48,13 +48,33 @@ function App() {
 
     try {
       // Step 1: Extract text using Azure Content Understanding
-      const formData = new FormData()
-      formData.append('image', file)
+      console.log('Converting file to base64 for reliable upload...')
       
-      console.log('Calling Content Understanding API...')
+      // Convert file to base64 to avoid multipart form issues with Azure Static Web Apps
+      const base64Data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = reader.result as string
+          // Remove the data URL prefix (data:image/jpeg;base64,)
+          const base64 = result.split(',')[1]
+          resolve(base64)
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      
+      console.log('Calling Content Understanding API with base64 data...')
       const extractResponse = await fetch('/api/extract-text', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: base64Data,
+          filename: file.name,
+          mimeType: file.type,
+          size: file.size
+        }),
       })
       
       console.log('Extract response status:', extractResponse.status, extractResponse.statusText)

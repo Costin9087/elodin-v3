@@ -70,15 +70,43 @@ module.exports = async function (context, req) {
             contentLength: req.headers['content-length']
         });
         
-        // Azure Static Web Apps multipart form parsing
-        // The form data comes in req.body as parsed fields
+        // Handle both JSON and multipart form data
         context.log('Raw request body type:', typeof req.body);
         context.log('Raw request body keys:', req.body ? Object.keys(req.body) : 'no body');
         context.log('Raw request headers:', Object.keys(req.headers || {}));
         context.log('Content-Type:', req.headers['content-type']);
         
-        // Try different ways to get the image data
-        if (req.body && req.body.image) {
+        // Check if this is JSON format (base64 encoded image)
+        if (req.headers['content-type'] && req.headers['content-type'].includes('application/json') && req.body && req.body.image) {
+            context.log('Processing JSON request with base64 image data');
+            context.log('Base64 data length:', req.body.image.length);
+            context.log('Filename:', req.body.filename);
+            context.log('MIME type:', req.body.mimeType);
+            context.log('File size:', req.body.size);
+            
+            try {
+                imageBuffer = Buffer.from(req.body.image, 'base64');
+                context.log('Successfully decoded base64 image, buffer size:', imageBuffer.length);
+            } catch (decodeError) {
+                context.log('Failed to decode base64 image:', decodeError);
+                context.res = {
+                    status: 400,
+                    body: {
+                        error: 'Invalid base64 data',
+                        message: 'Failed to decode base64 image data',
+                        details: {
+                            decodeError: decodeError.message
+                        }
+                    },
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                };
+                return;
+            }
+        }
+        // Try multipart form data parsing (fallback)
+        else if (req.body && req.body.image) {
             context.log('Found image in req.body.image, type:', typeof req.body.image);
             context.log('Image properties:', Object.keys(req.body.image));
             
@@ -174,11 +202,15 @@ module.exports = async function (context, req) {
             context.res = {
                 status: 400,
                 body: {
-                    error: 'Invalid image data',
-                    message: 'Image buffer is empty or invalid',
+                    error: 'No image data extracted',
+                    message: 'Failed to extract image data from the uploaded file. This usually indicates a form parsing issue.',
                     details: {
                         bufferLength: imageBuffer ? imageBuffer.length : 0,
-                        bufferType: typeof imageBuffer
+                        bufferType: typeof imageBuffer,
+                        requestBodyType: typeof req.body,
+                        requestBodyKeys: req.body ? Object.keys(req.body) : null,
+                        contentType: req.headers['content-type'],
+                        debugInfo: 'Form data parsing failed - image not extracted from multipart form'
                     }
                 },
                 headers: {
