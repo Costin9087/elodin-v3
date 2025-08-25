@@ -186,8 +186,18 @@ function App() {
           rationale: item.rationale || '',
           type: item.role || 'body'
         }));
-      } else if (!Array.isArray(reviewData)) {
+      } else if (Array.isArray(reviewData)) {
+        // If already in correct format, ensure all objects have required fields
+        reviewData = reviewData.map((item: any) => ({
+          original: item.original || '',
+          rewritten: item.rewritten || item.suggestion || item.original || '',
+          changes: item.changes || (item.suggestion && item.suggestion !== item.original ? [item.suggestion] : []),
+          rationale: item.rationale || '',
+          type: item.type || item.role || 'body'
+        }));
+      } else {
         // Fallback for unexpected data structure
+        console.warn('Unexpected review data structure:', reviewData);
         reviewData = [];
       }
       

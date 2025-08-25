@@ -175,7 +175,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ reviewResults, uploadedImageU
             <div className="flex justify-between items-center py-2 border-b border-gray-100">
               <span className="text-gray-600">Improvements Made</span>
               <span className="font-semibold text-gray-900">
-                {reviewResults.filter(result => result.changes.length > 0).length}
+                {reviewResults.filter(result => result.changes && result.changes.length > 0).length}
               </span>
             </div>
             <div className="flex justify-between items-center py-2">
@@ -219,11 +219,11 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ reviewResults, uploadedImageU
               </div>
             </div>
 
-            {result.changes.length > 0 && (
+            {result.changes && result.changes.length > 0 && (
               <div className="mb-4">
                 <h4 className="text-sm font-medium text-gray-700 mb-2">Changes Made</h4>
                 <ul className="list-disc list-inside space-y-1">
-                  {result.changes.map((change, changeIndex) => (
+                  {result.changes && result.changes.map((change, changeIndex) => (
                     <li key={changeIndex} className="text-sm text-gray-600">
                       {change}
                     </li>
