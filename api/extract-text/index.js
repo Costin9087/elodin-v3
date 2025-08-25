@@ -70,15 +70,31 @@ module.exports = async function (context, req) {
             contentLength: req.headers['content-length']
         });
         
-        // Try to get image from req.body (multipart form data)
+        // Azure Static Web Apps multipart form parsing
+        // The form data comes in req.body as parsed fields
+        context.log('Raw request body type:', typeof req.body);
+        context.log('Raw request body keys:', req.body ? Object.keys(req.body) : 'no body');
+        context.log('Raw request headers:', Object.keys(req.headers || {}));
+        context.log('Content-Type:', req.headers['content-type']);
+        
+        // Try different ways to get the image data
         if (req.body && req.body.image) {
             context.log('Found image in req.body.image, type:', typeof req.body.image);
+            context.log('Image properties:', Object.keys(req.body.image));
+            
             if (Buffer.isBuffer(req.body.image)) {
                 imageBuffer = req.body.image;
                 context.log('Using image buffer directly from req.body.image');
+            } else if (req.body.image.data && Array.isArray(req.body.image.data)) {
+                // Handle case where image comes as { data: [byte array] }
+                context.log('Found image as data array with length:', req.body.image.data.length);
+                imageBuffer = Buffer.from(req.body.image.data);
+            } else if (req.body.image.data && Buffer.isBuffer(req.body.image.data)) {
+                context.log('Found image as data buffer');
+                imageBuffer = req.body.image.data;
             } else if (typeof req.body.image === 'string') {
-                context.log('Converting string image data to buffer');
-                // Try base64 decode
+                context.log('Converting string image data to buffer, length:', req.body.image.length);
+                // Try base64 decode first
                 try {
                     imageBuffer = Buffer.from(req.body.image, 'base64');
                     context.log('Successfully decoded base64 image');
@@ -86,22 +102,52 @@ module.exports = async function (context, req) {
                     imageBuffer = Buffer.from(req.body.image);
                     context.log('Using string as raw buffer');
                 }
-            } else if (req.body.image.data) {
-                // Sometimes the image comes as an object with data property
-                context.log('Found image.data object');
-                imageBuffer = Buffer.from(req.body.image.data);
+            } else if (req.body.image.fieldname === 'image' && req.body.image.buffer) {
+                // Multer-style object
+                context.log('Found multer-style image object');
+                imageBuffer = req.body.image.buffer;
             }
         } else if (req.rawBody) {
-            context.log('Found image in req.rawBody, type:', typeof req.rawBody);
+            context.log('Found image in req.rawBody, type:', typeof req.rawBody, 'length:', req.rawBody.length);
             imageBuffer = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
         } else if (req.body && typeof req.body === 'string') {
-            context.log('Request body is a string, trying to parse as image data');
-            try {
-                imageBuffer = Buffer.from(req.body, 'base64');
-                context.log('Successfully parsed body as base64 image');
-            } catch (e) {
-                imageBuffer = Buffer.from(req.body);
-                context.log('Using body string as raw buffer');
+            context.log('Request body is a string, trying to parse as image data, length:', req.body.length);
+            // Check if it looks like multipart form data
+            if (req.body.includes('------WebKitFormBoundary') || req.body.includes('Content-Disposition: form-data')) {
+                context.log('Detected multipart form data in body string, attempting to parse...');
+                // Try to extract the file content from multipart data
+                try {
+                    const boundary = req.body.match(/------[^\r\n]+/)?.[0];
+                    if (boundary) {
+                        context.log('Found boundary:', boundary);
+                        const parts = req.body.split(boundary);
+                        for (const part of parts) {
+                            if (part.includes('name="image"') && part.includes('Content-Type:')) {
+                                // Extract the binary data after the headers
+                                const dataStart = part.indexOf('\r\n\r\n') + 4;
+                                const dataEnd = part.lastIndexOf('\r\n');
+                                if (dataStart > 3 && dataEnd > dataStart) {
+                                    const binaryData = part.substring(dataStart, dataEnd);
+                                    imageBuffer = Buffer.from(binaryData, 'binary');
+                                    context.log('Extracted image from multipart data, size:', imageBuffer.length);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (parseError) {
+                    context.log('Failed to parse multipart data:', parseError);
+                }
+            }
+            
+            if (!imageBuffer) {
+                try {
+                    imageBuffer = Buffer.from(req.body, 'base64');
+                    context.log('Successfully parsed body as base64 image');
+                } catch (e) {
+                    imageBuffer = Buffer.from(req.body);
+                    context.log('Using body string as raw buffer');
+                }
             }
         } else {
             context.res = {
