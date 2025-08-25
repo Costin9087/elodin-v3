@@ -3,6 +3,24 @@ const axios = require('axios');
 module.exports = async function (context, req) {
     context.log('Review copy function called - v2');
     
+    // Handle GET requests for testing
+    if (req.method === 'GET') {
+        context.res = {
+            status: 200,
+            body: {
+                message: "Review-copy function is working!",
+                method: req.method,
+                timestamp: new Date().toISOString(),
+                status: "ready",
+                note: "Function can process copy review via POST with content understanding data"
+            },
+            headers: {
+                "Content-Type": "application/json"
+            }
+        };
+        return;
+    }
+    
     try {
         // Check environment variables first
         const endpoint = process.env.AZURE_PROMPT_FLOW_ENDPOINT;
